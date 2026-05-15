@@ -2,13 +2,13 @@
 // EdgeWeave Sharpen
 // ----------------------------------------------------------------------------
 // A real-time edge-aware reconstruction sharpening filter (DX9 / PS_3_0)
-// Designed for video playback enhancement in post-processing pipelines
-// (e.g. PotPlayer, MPC-HC/BEs shader chains).
-// This shader does NOT perform naive high-pass sharpening.
-// Instead, it reconstructs perceived detail using local edge structure
-// and suppresses amplification in unstable or flat regions.
+// Instead of classic high-pass sharpening, this filter:
+// - detects edges (Sobel)
+// - evaluates edge reliability (coherence + stair detection)
+// - applies adaptive sharpening only where structure is stable
+// - suppresses sharpening on noisy or diagonal alias-prone regions
+// Designed for video playback enhancement in real-time shaders.
 // ============================================================================
-
 
 sampler s0 : register(s0);
 float4 p0  : register(c0);
@@ -16,115 +16,145 @@ float4 p1  : register(c1);
 
 #define width           (p0[0])
 #define height          (p0[1])
-#define counter         (p0[2])
-#define clock           (p0[3])
 
 #define px (p1[0])
 #define py (p1[1])
 
+// User controls
+#define STRENGTH        1.50   // overall sharpening intensity
+#define EDGE_MIN        0.0060  // minimum edge sensitivity
+#define EDGE_MAX        0.0600  // maximum edge sensitivity
+#define DETAIL_THRESH   0.0025  // small detail noise cutoff
+#define CLAMP_LIMIT     0.18    // limits overshoot and ringing
 
-// ============================================================================
-// Tunable Parameters
-// ============================================================================
+// stability controls
+#define COHERENCE_MIN   0.70    // minimum sharpening on unstable edges
+#define STAIR_REJECT    0.40    // reduces sharpening on stair-stepped edges
 
-// Global sharpening intensity. Higher values increase perceived detail but may introduce overshoot
-#define STRENGTH        5.00
-
-// Edge detection thresholds. Define the activation range for structure-sensitive sharpening.
-#define EDGE_MIN        0.0060
-#define EDGE_MAX        0.0600
-
-// Deadzone for micro-detail suppression. Prevents noise amplification in low-structure areas.
-#define DETAIL_THRESH   0.0025
-
-// Soft clamp limit for reconstruction stability. Lower values = safer image, higher values = more aggressive sharpening.
-#define CLAMP_LIMIT     0.18
-
-
-// ============================================================================
-// Utility Functions
-// ============================================================================
-
-// Perceptual luminance conversion using Rec.709 weights. Used for structure estimation instead of RGB-space processing.
+// Convert RGB to luminance
 float Luma(float3 c)
 {
     return dot(c, float3(0.2126, 0.7152, 0.0722));
 }
 
-// Soft limiting function used to avoid hard clipping artifacts. Compresses extreme sharpening values smoothly instead of cutting them.
+// Soft limiting function (prevents harsh clipping / ringing)
 float SoftLimit(float x, float limit)
 {
     return x / (1.0 + abs(x) / max(limit, 1e-5));
 }
 
-// ============================================================================
-// Main Shader
-// ============================================================================
-
 float4 main(float2 tex : TEXCOORD0) : COLOR
 {
-    // 3x3 neighborhood sampling (cross + corners). Used for local structure estimation and blur baseline.
+    // 3x3 neighborhood sampling
     float3 c1 = tex2D(s0, tex + float2(-px, -py)).rgb;
     float3 c2 = tex2D(s0, tex + float2( 0.0, -py)).rgb;
     float3 c3 = tex2D(s0, tex + float2( px, -py)).rgb;
+
     float3 c4 = tex2D(s0, tex + float2(-px,  0.0)).rgb;
     float3 c5 = tex2D(s0, tex).rgb;
     float3 c6 = tex2D(s0, tex + float2( px,  0.0)).rgb;
+
     float3 c7 = tex2D(s0, tex + float2(-px,  py)).rgb;
     float3 c8 = tex2D(s0, tex + float2( 0.0,  py)).rgb;
     float3 c9 = tex2D(s0, tex + float2( px,  py)).rgb;
 
-    // Luminance extraction, structural analysis is performed in luma space to avoid chroma noise, amplification and color bleeding artifacts.
-    float y1 = Luma(c1);
-    float y2 = Luma(c2);
-    float y3 = Luma(c3);
-    float y4 = Luma(c4);
-    float y5 = Luma(c5);
-    float y6 = Luma(c6);
-    float y7 = Luma(c7);
-    float y8 = Luma(c8);
-    float y9 = Luma(c9);
+    // Convert to luminance for edge detection
+    float y1 = Luma(c1); float y2 = Luma(c2); float y3 = Luma(c3);
+    float y4 = Luma(c4); float y5 = Luma(c5); float y6 = Luma(c6);
+    float y7 = Luma(c7); float y8 = Luma(c8); float y9 = Luma(c9);
 
-    // Sobel-like gradient estimation. Measures local edge strength using horizontal and vertical derivatives.
-    float gx = (y3 + 2.0 * y6 + y9) - (y1 + 2.0 * y4 + y7);
-    float gy = (y7 + 2.0 * y8 + y9) - (y1 + 2.0 * y2 + y3);
-    float g = sqrt(gx * gx + gy * gy);
+    // Edge detection (Sobel operator)
+    float gx = (y3 + 2*y6 + y9) - (y1 + 2*y4 + y7);
+    float gy = (y7 + 2*y8 + y9) - (y1 + 2*y2 + y3);
 
-    // Resolution-aware edge thresholding. Adjusts sensitivity based on output resolution to maintain consistency across different display scales.
+    float g = sqrt(gx*gx + gy*gy);
+
+    // Resolution scaling (keeps behavior consistent across resolutions)
     float resScale = saturate(720.0 / max(width, height));
+
     float edgeMin = lerp(EDGE_MIN, EDGE_MIN * 0.70, resScale);
     float edgeMax = lerp(EDGE_MAX, EDGE_MAX * 0.82, resScale);
-    float edge = saturate((g - edgeMin) / max(edgeMax - edgeMin, 1e-5));
-    edge = pow(edge, 1.12);
 
-    // Local blur estimation. Used as a reference baseline for detail extraction. No directional sampling is used to avoid edge bias or smear artifacts.
-    float blurY = (y2 + y4 + y6 + y8) * 0.20 +
-                  (y1 + y3 + y7 + y9) * 0.05;
+    // Edge confidence mask (soft threshold)
+    float edge =
+        saturate((g - edgeMin) /
+        max(edgeMax - edgeMin, 1e-5));
 
-    // Detail extraction.Computes high-frequency component relative to local blur baseline. Includes a small deadzone to suppress noise amplification.
+    // Smooth curve for more natural response
+    edge = 1.0 / (1.0 + exp(-edge * 6.0 + 3.0));
+
+    // Local blur estimate (used to extract fine detail)
+    float blurY =
+        (y2 + y4 + y6 + y8) * 0.20 +
+        (y1 + y3 + y7 + y9) * 0.05;
+
     float detail = y5 - blurY;
+
+    // Remove tiny noise (prevents micro flickering)
     float ad = abs(detail);
     float deadzone = DETAIL_THRESH * lerp(1.15, 0.85, resScale);
+
     detail = sign(detail) * max(ad - deadzone, 0.0);
 
-    // Edge-gated sharpening gain. Sharpening is only applied where structural confidence is high.
+    // Edge reliability analysis
+    float ax = abs(gx);
+    float ay = abs(gy);
+
+    // Coherence:
+    // 1 = stable axis-aligned edge
+    // 0 = unstable / diagonal edge
+    float coherence = abs(ax - ay) / (ax + ay + 1e-5);
+
+    // Detect diagonal “stair-step” artifacts
+    float diagDiff = abs(y1 - y9) + abs(y3 - y7);
+    float stair = saturate(diagDiff / (g * 2.0 + 1e-5));
+
+    // Split detail into micro + macro components
+    float micro = detail;
+    float macro = y5 - blurY;
+
+    // Base sharpening gain
     float gain = STRENGTH * edge;
-    float yOut = y5 + detail * gain;
 
-    // Local stability clamp (CAS-inspired behavior). Prevents overshoot, halos, and edge inflation by constraining output within local neighborhood bounds.
-    float localMin = min(min(min(min(y1, y2), y3), y4),
-                         min(min(y5, y6), min(min(y7, y8), y9)));
+    // Reduce sharpening on unstable edges
+    gain *= lerp(COHERENCE_MIN, 1.0, coherence);
 
-    float localMax = max(max(max(max(y1, y2), y3), y4),
-                         max(max(y5, y6), max(max(y7, y8), y9)));
+    // Suppress stair-stepping amplification
+    gain *= 1.0 - stair * STAIR_REJECT;
 
-    yOut = clamp(yOut, localMin - 0.008, localMax + 0.008);
+    // Reduce micro-detail on unstable edges
+    micro *= lerp(0.6, 1.0, coherence);
 
-    // Soft compression of extreme sharpening values
+    // Combine sharpening contributions
+    float yOut = y5 + micro * gain + macro * gain * 0.35;
+
+    // Safety clamp (prevents ringing and over-enhancement)
+    float clampBoost = lerp(0.008, 0.020, edge);
+
+    float localMin =
+        min(min(min(y1, y2), y3),
+        min(min(y4, y5), min(y6, min(y7, min(y8, y9)))));
+
+    float localMax =
+        max(max(max(y1, y2), y3),
+        max(max(y4, y5), max(y6, max(y7, max(y8, y9)))));
+
+    yOut = clamp(yOut, localMin - clampBoost, localMax + clampBoost);
+
+    // Soft limit final adjustment (smooth compression)
     yOut = y5 + SoftLimit(yOut - y5, CLAMP_LIMIT);
 
-    // Reapply luminance difference to RGB. Preserves chroma while modifying perceived brightness structure only.
+    // Restore RGB
     float3 outRGB = c5 + (yOut - y5).xxx;
+
+    // Lightweight diagonal smoothing (optional artifact reduction)
+    float diagEdge = 1.0 - coherence;
+
+    float3 diagBlend = (c1 + c3 + c7 + c9) * 0.25;
+
+    float blendMask = diagEdge * stair * edge;
+
+    outRGB = lerp(outRGB, diagBlend, blendMask * 0.08);
 
     return float4(saturate(outRGB), 1.0);
 }
