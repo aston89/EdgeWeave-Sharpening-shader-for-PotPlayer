@@ -134,3 +134,15 @@ EdgeWeave Sharpen can also be used in:
 - MPC-HC / MPC-BE (pixel shader support enabled and .txt changed into .hlsl)
 - any DirectX 9 compatible video renderer exposing PS_3_0 hooks
 - shader injection pipelines that emulate DX9-style post-processing
+
+---
+
+## Update V2 (2026/05/11)
+
+- Added edge coherence analysis to detect unreliable / diagonal edges and reduce over-sharpening in those regions
+- Introduced staircase (aliasing) detection to suppress sharpening on stair-stepped diagonal patterns (hair, fine lines, textures)
+- Reworked edge response using a sigmoid-based curve for smoother and more natural edge weighting
+- Split detail processing into micro and macro components to better preserve structure while reducing noise amplification
+- Improved stability of sharpening gain through combined coherence + stair-aware modulation
+- Added edge-dependent clamp scaling to reduce artifacts in flat regions while preserving detail in strong edges
+- Refined diagonal edge handling with a lightweight SMAA-inspired micro blend to reduce perceived aliasing without full blur/AA pass
