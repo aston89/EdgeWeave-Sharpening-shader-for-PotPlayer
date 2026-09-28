@@ -146,3 +146,102 @@ EdgeWeave Sharpen can also be used in:
 - Improved stability of sharpening gain through combined coherence + stair-aware modulation
 - Added edge-dependent clamp scaling to reduce artifacts in flat regions while preserving detail in strong edges
 - Refined diagonal edge handling with a lightweight SMAA-inspired micro blend to reduce perceived aliasing without full blur/AA pass
+
+---
+---
+
+# EdgeWeave Sharpen LX
+
+**EdgeWeave Sharpen LX** is a more aggressive and lightweight variant of the original EdgeWeave Sharpen shader.
+While the standard version focuses on conservative edge-aware sharpening, LX changes the way sharpening detail is extracted and applied. Instead of relying mainly on a general local detail estimate, LX uses **directional second-derivative information** to sharpen along the locally detected structure of an edge.
+
+### How LX differs from the standard version
+
+The standard EdgeWeave Sharpen pipeline is roughly:
+
+```text
+Sobel edge detection
+        ↓
+edge confidence
+        ↓
+coherence / stair-step analysis
+        ↓
+local detail extraction
+        ↓
+adaptive sharpening
+        ↓
+anti-ringing protection
+```
+
+The LX variant keeps the same edge-aware philosophy, but changes the sharpening stage:
+
+```text
+Sobel edge detection
+        ↓
+edge confidence
+        ↓
+local edge orientation
+        ↓
+directional detail extraction
+        ↓
+adaptive directional sharpening
+        ↓
+anti-ringing protection
+```
+
+Instead of simply increasing the contrast of a local high-pass signal, LX estimates whether the structure is primarily horizontal, vertical, or diagonal and applies the sharpening response along the corresponding direction.
+
+This allows LX to enhance:
+
+* fine edges and line structure more decisively
+* thin high-contrast details
+* diagonal structures without automatically treating them as unstable
+* local detail while reducing unnecessary sharpening in flat or noisy regions
+
+### Why LX can look sharper while using less processing
+
+The LX implementation removes some of the more expensive operations used by the original shader, including the square-root gradient magnitude and exponential edge curve.
+
+The edge response is built from simpler operations such as:
+
+```text
+abs
+add
+multiply
+lerp
+saturate
+min / max
+step
+```
+
+The shader still uses the same 3×3 neighborhood, so it does not achieve its lighter processing by throwing away spatial information. Instead, it uses the existing samples more directly.
+
+### Sharpening philosophy
+
+LX is **not a conventional unsharp-mask sharpener**.
+
+It does not simply perform:
+
+```text
+output = image + (image - blur) × strength
+```
+
+The sharpening signal is derived from the local structure and its orientation. Edge confidence, detail thresholding, stair-step suppression, and local anti-ringing limits are still part of the process.
+
+The result is intended to be more incisive than the standard EdgeWeave Sharpen while remaining selective about *where* sharpening is allowed to occur.
+
+### Standard vs LX
+
+|                              | EdgeWeave Sharpen        | EdgeWeave Sharpen LX          |
+| ---------------------------- | ------------------------ | ----------------------------- |
+| Sharpening style             | Conservative             | More aggressive               |
+| Edge awareness               | Yes                      | Yes                           |
+| Orientation awareness        | Limited                  | Directional                   |
+| Diagonal handling            | Conservative suppression | Directional reconstruction    |
+| Detail extraction            | Local blur/detail        | Directional second derivative |
+| Expensive `sqrt()` / `exp()` | Yes                      | No                            |
+| Processing cost              | Higher                   | Lower                         |
+| Intended character           | Soft / natural           | Crisp / incisive              |
+
+Both variants are intentionally kept in the project because they target different visual preferences. **Standard** prioritizes a softer and more conservative result, while **LX** prioritizes stronger structural definition with a lighter shader implementation.
+
