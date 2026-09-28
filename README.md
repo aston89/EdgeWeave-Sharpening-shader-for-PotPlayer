@@ -230,7 +230,9 @@ The sharpening signal is derived from the local structure and its orientation. E
 
 The result is intended to be more incisive than the standard EdgeWeave Sharpen while remaining selective about *where* sharpening is allowed to occur.
 
-### Standard vs LX
+---
+
+# Standard vs LX
 
 |                              | EdgeWeave Sharpen        | EdgeWeave Sharpen LX          |
 | ---------------------------- | ------------------------ | ----------------------------- |
