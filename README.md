@@ -1,3 +1,12 @@
+
+## Table of Contents
+
+1. [EdgeWeave: sharpening shader for PotPlayer and other Media Players](https://github.com/aston89/EdgeWeave-Sharpening-shader-for-PotPlayer/tree/main#edgeweave-sharpening-shader-for-potplayer-and-other-media-players)
+2. [EdgeWeave Sharpen LX](https://github.com/aston89/EdgeWeave-Sharpening-shader-for-PotPlayer/tree/main#edgeweave-sharpen-lx)
+3. [Standard vs LX](https://github.com/aston89/EdgeWeave-Sharpening-shader-for-PotPlayer/blob/main/README.md#standard-vs-lx)
+
+
+
 # EdgeWeave: sharpening shader for PotPlayer and other Media Players
 
 EdgeWeave Sharpen is not a traditional sharpening filter, it's a **structure-aware reconstruction enhancer shader** that prioritize perceptual clarity and stability over raw sharpness amplification.
@@ -5,15 +14,11 @@ It is intended for live video playback enhancement in media players that expose 
 It sits between classical sharpening and edge-aware reconstruction filtering, focusing on preserving visual integrity rather than maximizing contrast.
 Designed for legacy DirectX 9 / Pixel Shader 3.0 video pipelines.
 
----
-
 ## What it is
 EdgeWeave Sharpen is a **per-frame, non-temporal, edge-gated sharpening filter**.
 Unlike traditional sharpening filters that uniformly amplify high-frequency contrast, EdgeWeave selectively reconstructs perceived detail based on local edge structure and signal stability.
 
 The goal is not to "increase sharpness" but to improve **perceptual clarity without introducing artifacts such as ringing, halos, or edge inflation**.
-
----
 
 ## What it is useful for
 EdgeWeave Sharpen is designed for:
@@ -27,8 +32,6 @@ It's especially effective in cases where traditional sharpening produces:
 - edge overshoot
 - noisy texture amplification
 - overly harsh contrast transitions
-
----
 
 ## How it works
 EdgeWeave Sharpen operates entirely in a **DX9 Pixel Shader 3.0 (PS_3_0) pipeline**.
@@ -50,8 +53,6 @@ The shader operates strictly **per frame**.
 5. Edge-gated sharpening application
 6. Clamp-based reconstruction stabilization
 
----
-
 ## Key difference vs traditional sharpening
 
 Most sharpening filters (CAS-like, unsharp mask, Laplacian-based):
@@ -70,8 +71,6 @@ EdgeWeave Sharpen instead:
 Result:
 > less “crispy but broken”, more “clear but stable”
 
----
-
 ## Limitations
 EdgeWeave Sharpen is intentionally constrained by design:
 - Limited performance scaling on extremely low resolution content (≤480p)
@@ -81,61 +80,12 @@ At very high strength values, the filter may still introduce:
 - mild edge thickening
 - structural exaggeration on high-contrast transitions
 
----
-
 ## Performance and structure
 - Shader model: Pixel Shader 3.0 (ps_3_0)
 - API target: DirectX 9 class pipeline
 - Input: single texture sampler (s0)
 - Constants: screen width/height, texel size
 - No compute shaders, no multi-pass accumulation, no temporal storage.
-
----
-
-## Usage in PotPlayer
-EdgeWeave Sharpen is compatible with PotPlayer’s built-in pixel shader pipeline.
-
-### Recommended placement:
-
-**Post-resize (recommended default)**
-Best used after scaling because:
-- image is already upscaled and softened by interpolation
-- sharpening operates on final pixel grid
-- reduces risk of aliasing amplification
-
-This is the most stable and visually consistent configuration.
-
-**Pre-resize (advanced use)**
-Can be used before scaling when:
-- source is already high quality (Blu-ray, clean anime encodes)
-- scaling algorithm is high quality (Lanczos, Bicubic sharp)
-
-However:
-- sharpening may be partially altered by subsequent scaling
-- edge reconstruction may be slightly less stable
-
----
-
-## Renderer considerations
-Best results are obtained when:
-- Direct3D 9 / legacy pipeline is used
-- pixel shader stage is fully active (no hardware bypass overlay path)
-- hardware video acceleration does not bypass final shader stage
-
-If no visible effect is observed, ensure:
-
-- pixel shader support is enabled in renderer settings
-- only one shader chain is active (avoid override conflicts)
-
----
-
-## Compatibility
-EdgeWeave Sharpen can also be used in:
-- MPC-HC / MPC-BE (pixel shader support enabled and .txt changed into .hlsl)
-- any DirectX 9 compatible video renderer exposing PS_3_0 hooks
-- shader injection pipelines that emulate DX9-style post-processing
-
----
 
 ## Update V2 (2026/05/11)
 
@@ -147,7 +97,6 @@ EdgeWeave Sharpen can also be used in:
 - Added edge-dependent clamp scaling to reduce artifacts in flat regions while preserving detail in strong edges
 - Refined diagonal edge handling with a lightweight SMAA-inspired micro blend to reduce perceived aliasing without full blur/AA pass
 
----
 ---
 
 # EdgeWeave Sharpen LX
@@ -247,3 +196,43 @@ The result is intended to be more incisive than the standard EdgeWeave Sharpen w
 
 Both variants are intentionally kept in the project because they target different visual preferences. **Standard** prioritizes a softer and more conservative result, while **LX** prioritizes stronger structural definition with a lighter shader implementation.
 
+---
+
+## Usage in PotPlayer
+EdgeWeave Sharpen is compatible with PotPlayer’s built-in pixel shader pipeline.
+
+### Recommended placement:
+
+**Post-resize (recommended default)**
+Best used after scaling because:
+- image is already upscaled and softened by interpolation
+- sharpening operates on final pixel grid
+- reduces risk of aliasing amplification
+
+This is the most stable and visually consistent configuration.
+
+**Pre-resize (advanced use)**
+Can be used before scaling when:
+- source is already high quality (Blu-ray, clean anime encodes)
+- scaling algorithm is high quality (Lanczos, Bicubic sharp)
+
+However:
+- sharpening may be partially altered by subsequent scaling
+- edge reconstruction may be slightly less stable
+
+## Renderer considerations
+Best results are obtained when:
+- Direct3D 9 / legacy pipeline is used
+- pixel shader stage is fully active (no hardware bypass overlay path)
+- hardware video acceleration does not bypass final shader stage
+
+If no visible effect is observed, ensure:
+
+- pixel shader support is enabled in renderer settings
+- only one shader chain is active (avoid override conflicts)
+
+## Compatibility
+EdgeWeave Sharpen can also be used in:
+- MPC-HC / MPC-BE (pixel shader support enabled and .txt changed into .hlsl)
+- any DirectX 9 compatible video renderer exposing PS_3_0 hooks
+- shader injection pipelines that emulate DX9-style post-processing
