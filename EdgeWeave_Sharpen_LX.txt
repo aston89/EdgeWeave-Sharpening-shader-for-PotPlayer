@@ -1,0 +1,340 @@
+// ============================================================================
+// EdgeWeave Directional Sharpen
+// ----------------------------------------------------------------------------
+// DX9 / PS_3_0
+//
+// Key changes:
+// - no sqrt()
+// - no exp()
+// - true zero edge gate
+// - directional second derivative
+// - 4 sharpening directions: X / Y / D1 / D2
+// - diagonal edges are reconstructed, not blurred
+// - deadzone is applied to the actual sharpening signal
+// - stair rejection based on gradient consistency
+// - local anti-ringing clamp retained
+// ============================================================================
+
+sampler s0 : register(s0);
+
+float4 p0 : register(c0);
+float4 p1 : register(c1);
+
+#define width   (p0[0])
+#define height  (p0[1])
+
+#define px      (p1[0])
+#define py      (p1[1])
+
+// -----------------------------------------------------------------------------
+// Controls
+// -----------------------------------------------------------------------------
+
+#define STRENGTH        1.55
+
+#define EDGE_MIN        0.0070
+#define EDGE_MAX        0.0550
+
+#define DETAIL_THRESH   0.0022
+
+#define STAIR_REJECT    0.28
+
+// Maximum allowed local overshoot.
+#define CLAMP_LIMIT     0.012
+
+// Diagonal directional contribution.
+// 1.0 = full directional diagonal handling.
+#define DIAG_RESPONSE    1.0
+
+// -----------------------------------------------------------------------------
+// Helpers
+// -----------------------------------------------------------------------------
+
+float Luma(float3 c)
+{
+    return dot(c, float3(0.2126, 0.7152, 0.0722));
+}
+
+// -----------------------------------------------------------------------------
+// Main
+// -----------------------------------------------------------------------------
+
+float4 main(float2 tex : TEXCOORD0) : COLOR
+{
+    // -------------------------------------------------------------------------
+    // 3x3 taps
+    // -------------------------------------------------------------------------
+
+    float3 c1 = tex2D(s0, tex + float2(-px, -py)).rgb;
+    float3 c2 = tex2D(s0, tex + float2( 0.0, -py)).rgb;
+    float3 c3 = tex2D(s0, tex + float2( px, -py)).rgb;
+
+    float3 c4 = tex2D(s0, tex + float2(-px,  0.0)).rgb;
+    float3 c5 = tex2D(s0, tex).rgb;
+    float3 c6 = tex2D(s0, tex + float2( px,  0.0)).rgb;
+
+    float3 c7 = tex2D(s0, tex + float2(-px,  py)).rgb;
+    float3 c8 = tex2D(s0, tex + float2( 0.0,  py)).rgb;
+    float3 c9 = tex2D(s0, tex + float2( px,  py)).rgb;
+
+    // -------------------------------------------------------------------------
+    // Luminance
+    // -------------------------------------------------------------------------
+
+    float y1 = Luma(c1);
+    float y2 = Luma(c2);
+    float y3 = Luma(c3);
+
+    float y4 = Luma(c4);
+    float y5 = Luma(c5);
+    float y6 = Luma(c6);
+
+    float y7 = Luma(c7);
+    float y8 = Luma(c8);
+    float y9 = Luma(c9);
+
+    // -------------------------------------------------------------------------
+    // Sobel gradient
+    //
+    // Use L1 magnitude instead of sqrt(gx^2 + gy^2).
+    // For edge gating we only need monotonic magnitude.
+    // -------------------------------------------------------------------------
+
+    float gx =
+        (y3 + 2.0 * y6 + y9) -
+        (y1 + 2.0 * y4 + y7);
+
+    float gy =
+        (y7 + 2.0 * y8 + y9) -
+        (y1 + 2.0 * y2 + y3);
+
+    float ax = abs(gx);
+    float ay = abs(gy);
+
+    float g = ax + ay;
+
+    // -------------------------------------------------------------------------
+    // Resolution compensation
+    // -------------------------------------------------------------------------
+
+    float resScale = saturate(720.0 / max(width, height));
+
+    float edgeMin = lerp(
+        EDGE_MIN,
+        EDGE_MIN * 0.72,
+        resScale
+    );
+
+    float edgeMax = lerp(
+        EDGE_MAX,
+        EDGE_MAX * 0.82,
+        resScale
+    );
+
+    // -------------------------------------------------------------------------
+    // Edge mask
+    //
+    // No sigmoid:
+    // below EDGE_MIN -> exactly zero
+    // above EDGE_MAX -> exactly one
+    // -------------------------------------------------------------------------
+
+    float edge =
+        saturate(
+            (g - edgeMin) /
+            max(edgeMax - edgeMin, 1e-5)
+        );
+
+    // Smoothstep curve without exp().
+    edge = edge * edge * (3.0 - 2.0 * edge);
+
+    // -------------------------------------------------------------------------
+    // Directional second derivatives
+    //
+    // X   = normal horizontal
+    // Y   = normal vertical
+    // D1  = normal on NW-SE diagonal
+    // D2  = normal on NE-SW diagonal
+    // -------------------------------------------------------------------------
+
+    float dX = 2.0 * y5 - y4 - y6;
+    float dY = 2.0 * y5 - y2 - y8;
+
+    float dD1 = 2.0 * y5 - y1 - y9;
+    float dD2 = 2.0 * y5 - y3 - y7;
+
+    // Axis contribution:
+    // if gx dominates, edge normal is mostly X
+    // if gy dominates, edge normal is mostly Y
+    //
+    // Weighted blend avoids a branch.
+
+    float sumG = ax + ay + 1e-5;
+
+    float axisDir =
+        (dX * ax + dY * ay) / sumG;
+
+    // -------------------------------------------------------------------------
+    // Diagonal direction selection
+    //
+    // gx*gy > 0  -> NW/SE diagonal
+    // gx*gy < 0  -> NE/SW diagonal
+    // -------------------------------------------------------------------------
+
+    float diagSign = step(0.0, gx * gy);
+
+    float diagDir =
+        lerp(dD2, dD1, diagSign);
+
+    // -------------------------------------------------------------------------
+    // Determine how diagonal the gradient is.
+    //
+    // 0 = axis aligned
+    // 1 = 45 degree diagonal
+    // -------------------------------------------------------------------------
+
+    float diagFactor =
+        1.0 -
+        abs(ax - ay) / sumG;
+
+    diagFactor =
+        saturate(diagFactor) * DIAG_RESPONSE;
+
+    // Direction-aware sharpening signal.
+    float directionalDetail =
+        lerp(
+            axisDir,
+            diagDir,
+            diagFactor
+        );
+
+    // -------------------------------------------------------------------------
+    // Detail gate
+    //
+    // Gate the actual sharpening signal, not a separate blur estimate.
+    // -------------------------------------------------------------------------
+
+    float ad = abs(directionalDetail);
+
+    float deadzone =
+        DETAIL_THRESH *
+        lerp(1.15, 0.85, resScale);
+
+    float detailGate =
+        saturate(
+            (ad - deadzone) /
+            max(deadzone, 1e-5)
+        );
+
+    // Smooth the gate a little.
+    detailGate =
+        detailGate * detailGate *
+        (3.0 - 2.0 * detailGate);
+
+    // -------------------------------------------------------------------------
+    // Stair-step detection
+    //
+    // Instead of assuming "diagonal = bad", compare the gradient above
+    // and below the center and left/right of the center.
+    //
+    // A clean straight edge tends to preserve gradient sign and magnitude.
+    // A staircase tends to oscillate these local estimates.
+    // -------------------------------------------------------------------------
+
+    float gxTop = y3 - y1;
+    float gxBot = y9 - y7;
+
+    float gyLeft  = y7 - y1;
+    float gyRight = y9 - y3;
+
+    float stairX =
+        abs(gxTop - gxBot) /
+        (abs(gxTop) + abs(gxBot) + 1e-5);
+
+    float stairY =
+        abs(gyLeft - gyRight) /
+        (abs(gyLeft) + abs(gyRight) + 1e-5);
+
+    float stair =
+        max(stairX, stairY);
+
+    // Only care about stair behaviour where an actual edge exists.
+    stair *= edge;
+
+    // -------------------------------------------------------------------------
+    // Gain
+    // -------------------------------------------------------------------------
+
+    float gain =
+        STRENGTH *
+        edge *
+        detailGate;
+
+    // Mild stair suppression.
+    gain *=
+        1.0 -
+        stair * STAIR_REJECT;
+
+    // -------------------------------------------------------------------------
+    // Apply sharpening
+    // -------------------------------------------------------------------------
+
+    float delta =
+        directionalDetail * gain;
+
+    float yOut =
+        y5 + delta;
+
+    // -------------------------------------------------------------------------
+    // Local anti-ringing clamp
+    // -------------------------------------------------------------------------
+
+    float localMin =
+        min(
+            min(min(y1, y2), y3),
+            min(
+                min(y4, y5),
+                min(y6,
+                    min(y7,
+                        min(y8, y9)))
+            )
+        );
+
+    float localMax =
+        max(
+            max(max(y1, y2), y3),
+            max(
+                max(y4, y5),
+                max(y6,
+                    max(y7,
+                        max(y8, y9)))
+            )
+        );
+
+    // Small controlled overshoot only.
+    float overshoot =
+        CLAMP_LIMIT *
+        (0.35 + 0.65 * edge);
+
+    yOut =
+        clamp(
+            yOut,
+            localMin - overshoot,
+            localMax + overshoot
+        );
+
+    // -------------------------------------------------------------------------
+    // Reconstruct RGB using exact luminance delta.
+    //
+    // Since weights sum to 1, adding the same delta to RGB changes luma
+    // by approximately exactly "delta".
+    // -------------------------------------------------------------------------
+
+    float3 outRGB =
+        c5 + (yOut - y5).xxx;
+
+    return float4(
+        saturate(outRGB),
+        1.0
+    );
+}
